@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="ko" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>링크숲 · 링크 큐레이션 플랫폼</title>
+
+  <!-- [배포 시 교체] Tailwind CDN → 빌드 방식(npm i -D tailwindcss)으로 전환하면 용량이 줄어듭니다. -->
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {
+        fontFamily: { sans: ['"Noto Sans KR"', 'system-ui', 'sans-serif'] },
+      } },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    /* ===== 디자인 토큰: 색상은 여기서만 바꾸면 전체에 반영됩니다 (매트 · 플랫) ===== */
+    :root { --bg: #F4F4F1; --surface: #FFFFFF; --line: #D9D9D3; --text: #1D1F23; --muted: #6A707B;
+            --accent: #4B58A8; --accent-hover: #3F4B96; --ring: #4B58A8; }
+    .dark { --bg: #15171B; --surface: #1D2026; --line: #2E333C; --text: #E4E6EA; --muted: #8C94A1;
+            --accent: #5A67B8; --accent-hover: #6875C4; --ring: #8B96DB; }
+    body { background: var(--bg); color: var(--text); }
+    .surface { background: var(--surface); border: 1px solid var(--line); }
+    .muted { color: var(--muted); }
+    /* 포인트 컬러는 단색 하나만 사용 (그라데이션·광채 없음) */
+    .accent-bg { background: var(--accent); color: #fff; }
+    .accent-bg:hover { background: var(--accent-hover); }
+    .shadow-entry { background: #A93649; color: #fff; border: 1px solid #C85162; box-shadow: 0 0 10px rgba(239, 68, 68, .28); }
+    .shadow-entry:hover { background: #B64053; box-shadow: 0 0 13px rgba(239, 68, 68, .38); }
+    /* 광고 슬롯: 점선 테두리로 "광고 영역"임을 분명히 하되 톤은 낮춤 */
+    .ad-slot { border: 1px dashed var(--line); color: var(--muted); background: transparent; }
+    .card:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+
+<body class="font-sans antialiased min-h-screen">
+
+<!-- ============ 헤더 ============ -->
+<header class="relative z-10 max-w-6xl mx-auto px-4 pt-5">
+  <div class="flex items-center gap-3">
+    <a href="#" class="flex items-center gap-2 shrink-0" aria-label="링크숲 홈">
+      <span class="accent-bg w-9 h-9 rounded-md grid place-items-center text-white font-bold">숲</span>
+      <span class="text-lg font-bold hidden sm:inline">링크숲</span>
+    </a>
+
+    <!-- 검색바: 단축키 "/" 로 포커스 -->
+    <label class="surface flex-1 flex items-center gap-2 rounded-md px-3 h-11">
+      <svg class="w-4 h-4 muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="search" placeholder="이름, 설명, 태그로 검색  ( / )" class="w-full bg-transparent outline-none text-sm" />
+    </label>
+
+    <button id="themeBtn" class="surface w-11 h-11 rounded-md shrink-0" aria-label="다크 모드 전환">🌗</button>
+    <div class="flex gap-2 shrink-0">
+      <button id="shadowEntry" class="shadow-entry h-11 px-3 rounded-md text-sm font-medium transition">사각지대</button>
+      <button id="uploadShadowLinks" class="surface h-11 px-3 rounded-md text-sm hidden">링크 업로드</button>
+      <input id="linkFile" type="file" accept=".json,.csv,application/json,text/csv" class="hidden" />
+      <button id="openModal" class="accent-bg text-white font-medium h-11 px-4 rounded-md text-sm">+ 링크 추가</button>
+    </div>
+  </div>
+</header>
+
+<main class="relative z-10 max-w-6xl mx-auto px-4 pb-16">
+
+  <!-- 소개 문구 -->
+  <section class="pt-10 pb-6">
+    <h1 class="text-2xl sm:text-3xl font-bold leading-snug">자주 가는 사이트,<br class="sm:hidden" /> 한 곳에서 바로 이동하세요</h1>
+    <p class="muted mt-2 text-sm sm:text-base">직접 고른 링크를 카테고리별로 모았습니다. <span id="count" class="font-medium" style="color:var(--text)"></span></p>
+  </section>
+
+  <!-- [광고 ①] 상단 리더보드 (728x90 / 반응형) -->
+  <div id="adTop" class="mb-6"></div>
+
+  <!-- 카테고리 필터 -->
+  <nav id="chips" class="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4" aria-label="카테고리"></nav>
+
+  <div class="grid lg:grid-cols-[1fr_300px] gap-6 mt-4">
+    <!-- 카드 목록 (+ 중간 광고) -->
+    <section id="grid" class="grid sm:grid-cols-2 gap-4 content-start" aria-live="polite"></section>
+
+    <!-- 사이드바 (PC에서만 표시) -->
+    <aside class="hidden lg:block">
+      <div class="sticky top-6 space-y-4">
+        <!-- [광고 ②] 사이드바 (300x250) -->
+        <div id="adSide"></div>
+        <div class="surface rounded-lg p-4">
+          <h2 class="font-bold text-sm mb-3">많이 누른 링크</h2>
+          <ol id="popular" class="space-y-2 text-sm"></ol>
+        </div>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<footer class="relative z-10 max-w-6xl mx-auto px-4 pb-10 text-xs muted">
+  © 링크숲 · 광고 영역은 <code>renderAd()</code> 에서 교체할 수 있습니다.
+</footer>
+
+<!-- ============ 링크 추가 모달 (UI 시뮬레이션) ============ -->
+<div id="modal" class="fixed inset-0 z-50 hidden items-end sm:items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <form id="addForm" class="surface w-full max-w-md rounded-lg p-5 space-y-3" novalidate>
+    <div class="flex items-center justify-between">
+      <h2 id="modalTitle" class="font-bold text-lg">링크 추가</h2>
+      <button type="button" id="closeModal" class="muted text-xl" aria-label="닫기">✕</button>
+    </div>
+    <p class="muted text-xs">사각지대 링크는 상단 사각지대 메뉴에 들어간 뒤 전용 링크 업로드 버튼으로 등록할 수 있습니다. CSV 열: name,url,desc,category,tags (태그는 세미콜론 구분)</p>
+    <input name="name" placeholder="사이트 이름" required class="w-full rounded-lg px-3 h-11 bg-transparent border text-sm" style="border-color:var(--line)" />
+    <input name="url" type="url" placeholder="https://example.com" required class="w-full rounded-lg px-3 h-11 bg-transparent border text-sm" style="border-color:var(--line)" />
+    <textarea name="desc" rows="2" placeholder="한 줄 설명" class="w-full rounded-lg px-3 py-2 bg-transparent border text-sm" style="border-color:var(--line)"></textarea>
+    <div class="grid grid-cols-2 gap-3">
+      <select name="category" class="rounded-lg px-3 h-11 border text-sm" style="background:var(--surface);border-color:var(--line)"></select>
+      <input name="tags" placeholder="태그 (쉼표로 구분)" class="rounded-lg px-3 h-11 bg-transparent border text-sm" style="border-color:var(--line)" />
+    </div>
+    <p id="formError" class="text-sm text-red-500 hidden"></p>
+    <button class="accent-bg text-white font-medium w-full h-11 rounded-md">링크 저장</button>
+  </form>
+</div>
+
+<div id="ageGate" class="fixed inset-0 z-[60] hidden items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="ageGateTitle">
+  <div class="surface w-full max-w-sm rounded-lg p-6 text-center space-y-4">
+    <h2 id="ageGateTitle" class="text-xl font-bold">19세 이상입니까?</h2>
+    <p class="muted text-sm">사각지대에는 성인용 웹사이트 링크가 포함될 수 있습니다.</p>
+    <div class="grid grid-cols-2 gap-3">
+      <button id="ageYes" class="accent-bg h-11 rounded-md font-medium">네, 19세 이상입니다</button>
+      <button id="ageNo" class="surface h-11 rounded-md font-medium">아니요</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+ * 링크숲 프론트엔드 뼈대 — 구조
+ *  1. CONFIG   : 카테고리, 광고 설정 등 바꾸기 쉬운 값
+ *  2. DATA     : 초기 샘플 데이터
+ *  3. STORAGE  : 저장소 어댑터 (지금은 localStorage → 나중에 API로 교체)
+ *  4. STATE    : 화면 상태
+ *  5. UTILS    : 공통 함수
+ *  6. RENDER   : 화면 그리기 함수들
+ *  7. EVENTS   : 이벤트 연결
+ *  8. INIT     : 시작
+ * ===================================================================== */
+
+/* ---------- 1. CONFIG ---------- */
+const CONFIG = {
+  storageKey: 'linkforest.links.v1',
+  deletedKey: 'linkforest.deleted-seeds.v1',
+  ownerKey: 'linkforest.owner-id.v1',
+  themeKey: 'linkforest.theme',
+  adEveryN: 6,            // 카드 N개마다 광고 1개 삽입 (0이면 끔)
+  useFavicon: true,       // true면 사이트 파비콘 시도, 실패 시 이니셜 표시
+  // 카테고리별 포인트 색 (카드 왼쪽 띠와 아이콘 배경에 사용)
+  categories: {
+    '개발':       '#6C7BC4',
+    '뉴스':       '#C47A6C',
+    '유틸리티':   '#5E9E93',
+    '엔터테인먼트': '#A97AA0',
+    '학습':       '#B89B5E',
+    '포털·검색':  '#4E83A8',
+    '쇼핑':       '#B56E78',
+    '금융':       '#547F70',
+    '공공·생활':  '#8B7954',
+    '지도·교통': '#5479A6',
+    '커뮤니티':   '#8C6BA5',
+    '콘텐츠':     '#B17C4E',
+    '여행':       '#4F918E',
+    '음식':       '#A96E53',
+    '취업·비즈니스': '#68768A',
+    '사각지대': '#8D536A',
+  },
+};
+
+/* ---------- 2. DATA ---------- */
+const SEED_LINKS = [
+  { id: 1, name: 'MDN Web Docs', url: 'https://developer.mozilla.org', desc: '웹 표준 문서와 튜토리얼의 기준점', category: '개발', tags: ['문서','html','css'], clicks: 42 },
+  { id: 2, name: 'GitHub', url: 'https://github.com', desc: '코드 저장소와 오픈소스 협업', category: '개발', tags: ['git','협업'], clicks: 60 },
+  { id: 3, name: 'Stack Overflow', url: 'https://stackoverflow.com', desc: '개발 질문과 답변 모음', category: '개발', tags: ['qna'], clicks: 31 },
+  { id: 4, name: '연합뉴스', url: 'https://www.yna.co.kr', desc: '속보와 주요 뉴스', category: '뉴스', tags: ['속보','국내'], clicks: 18 },
+  { id: 5, name: 'BBC News', url: 'https://www.bbc.com/news', desc: '해외 주요 소식', category: '뉴스', tags: ['해외'], clicks: 12 },
+  { id: 6, name: 'Papago', url: 'https://papago.naver.com', desc: '텍스트·웹사이트 번역', category: '유틸리티', tags: ['번역'], clicks: 27 },
+  { id: 7, name: 'TinyPNG', url: 'https://tinypng.com', desc: '이미지 용량 줄이기', category: '유틸리티', tags: ['이미지','압축'], clicks: 15 },
+  { id: 8, name: 'YouTube', url: 'https://www.youtube.com', desc: '영상 스트리밍', category: '엔터테인먼트', tags: ['영상'], clicks: 55 },
+  { id: 9, name: 'Letterboxd', url: 'https://letterboxd.com', desc: '본 영화 기록과 리뷰', category: '엔터테인먼트', tags: ['영화'], clicks: 9 },
+  { id: 10, name: 'Coursera', url: 'https://www.coursera.org', desc: '대학 강의와 자격 과정', category: '학습', tags: ['강의'], clicks: 20 },
+  { id: 11, name: '네이버', url: 'https://www.naver.com', desc: '검색, 뉴스, 쇼핑을 한곳에서 이용하는 포털', category: '포털·검색', tags: ['검색','포털'], clicks: 0 },
+  { id: 12, name: '다음', url: 'https://www.daum.net', desc: '검색과 뉴스, 카페를 제공하는 포털', category: '포털·검색', tags: ['검색','포털'], clicks: 0 },
+  { id: 13, name: '쿠팡', url: 'https://www.coupang.com', desc: '다양한 상품을 빠르게 주문하는 온라인 쇼핑몰', category: '쇼핑', tags: ['쇼핑','배송'], clicks: 0 },
+  { id: 14, name: '무신사', url: 'https://www.musinsa.com', desc: '패션 브랜드와 스타일 콘텐츠를 만나는 곳', category: '쇼핑', tags: ['패션','쇼핑'], clicks: 0 },
+  { id: 15, name: '토스', url: 'https://toss.im', desc: '송금과 금융 서비스를 간편하게 이용', category: '금융', tags: ['금융','송금'], clicks: 0 },
+  { id: 16, name: '카카오뱅크', url: 'https://www.kakaobank.com', desc: '모바일 중심의 은행 서비스', category: '금융', tags: ['은행','금융'], clicks: 0 },
+  { id: 17, name: '정부24', url: 'https://www.gov.kr', desc: '민원 신청과 정부 서비스를 한곳에서', category: '공공·생활', tags: ['민원','공공'], clicks: 0 },
+  { id: 18, name: '국민건강보험', url: 'https://www.nhis.or.kr', desc: '건강보험 자격과 보험료, 건강검진 정보', category: '공공·생활', tags: ['건강','공공'], clicks: 0 },
+  { id: 19, name: '카카오맵', url: 'https://map.kakao.com', desc: '장소 검색과 길찾기, 주변 정보 확인', category: '지도·교통', tags: ['지도','길찾기'], clicks: 0 },
+  { id: 20, name: '네이버 지도', url: 'https://map.naver.com', desc: '지도와 대중교통, 장소 리뷰 검색', category: '지도·교통', tags: ['지도','대중교통'], clicks: 0 },
+  { id: 21, name: '디시인사이드', url: 'https://www.dcinside.com', desc: '주제별 갤러리와 온라인 커뮤니티', category: '커뮤니티', tags: ['커뮤니티','갤러리'], clicks: 0 },
+  { id: 22, name: '더쿠', url: 'https://theqoo.net', desc: '다양한 관심사를 나누는 온라인 커뮤니티', category: '커뮤니티', tags: ['커뮤니티','이슈'], clicks: 0 },
+  { id: 23, name: '멜론', url: 'https://www.melon.com', desc: '음악 감상과 국내 음악 차트', category: '콘텐츠', tags: ['음악','스트리밍'], clicks: 0 },
+  { id: 24, name: '티빙', url: 'https://www.tving.com', desc: '국내외 드라마와 예능 스트리밍', category: '콘텐츠', tags: ['영상','OTT'], clicks: 0 },
+  { id: 25, name: '여기어때', url: 'https://www.yeogi.com', desc: '숙소와 국내 여행 상품 예약', category: '여행', tags: ['여행','숙소'], clicks: 0 },
+  { id: 26, name: '대한항공', url: 'https://www.koreanair.com', desc: '항공권 예약과 여행 정보', category: '여행', tags: ['항공','여행'], clicks: 0 },
+  { id: 27, name: '배달의민족', url: 'https://www.baemin.com', desc: '주변 음식점과 배달 메뉴 탐색', category: '음식', tags: ['배달','음식'], clicks: 0 },
+  { id: 28, name: '마켓컬리', url: 'https://www.kurly.com', desc: '식품과 생활 상품 온라인 장보기', category: '음식', tags: ['장보기','식품'], clicks: 0 },
+  { id: 29, name: '사람인', url: 'https://www.saramin.co.kr', desc: '채용 공고와 이력서, 커리어 정보', category: '취업·비즈니스', tags: ['취업','채용'], clicks: 0 },
+  { id: 30, name: '잡코리아', url: 'https://www.jobkorea.co.kr', desc: '국내 채용 정보와 취업 콘텐츠', category: '취업·비즈니스', tags: ['취업','채용'], clicks: 0 },
+];
+
+/* ---------- 3. STORAGE (교체 지점) ----------
+ * 백엔드 연결 시 이 객체의 load/save만 fetch('/api/links')로 바꾸면 됩니다. */
+const Storage = {
+  load() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CONFIG.storageKey));
+      const removed = new Set(JSON.parse(localStorage.getItem(CONFIG.deletedKey) || '[]'));
+      const links = (Array.isArray(saved) ? saved : []).map((link) =>
+        !SEED_LINKS.some((seed) => seed.id === link.id) && !link.ownerId ? { ...link, ownerId: OWNER_ID } : link
+      );
+      const savedIds = new Set(links.map((link) => link.id));
+      return [...links, ...SEED_LINKS.filter((link) => !savedIds.has(link.id) && !removed.has(link.id))];
+    } catch { return SEED_LINKS; }
+  },
+  saveLocal(links) {
+    try { localStorage.setItem(CONFIG.storageKey, JSON.stringify(links)); } catch {}
+  },
+  save(links) {
+    this.saveLocal(links);
+    syncOwnedLinks(links);
+  },
+  markSeedDeleted(id) {
+    try {
+      const removed = new Set(JSON.parse(localStorage.getItem(CONFIG.deletedKey) || '[]'));
+      removed.add(id);
+      localStorage.setItem(CONFIG.deletedKey, JSON.stringify([...removed]));
+    } catch {}
+  },
+};
+
+/* ---------- 4. STATE ---------- */
+function getOwnerId() {
+  try {
+    let id = localStorage.getItem(CONFIG.ownerKey);
+    if (!id) {
+      id = crypto.randomUUID ? crypto.randomUUID() : `owner-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(CONFIG.ownerKey, id);
+    }
+    return id;
+  } catch { return 'local-owner'; }
+}
+let OWNER_ID = getOwnerId();
+let firebaseAuth = null;
+let firestore = null;
+let sharedLinksUnsubscribe = null;
+/*
+ * Firebase Console의 Firestore Rules에 다음 규칙을 게시하세요.
+ * 익명 로그인 사용자는 링크를 읽을 수 있고, 본인이 올린 문서만 수정/삭제할 수 있습니다.
+ *
+ * rules_version = '2';
+ * service cloud.firestore {
+ *   match /databases/{database}/documents {
+ *     match /sharedLinks/{linkId} {
+ *       allow read: if true;
+ *       allow create: if request.auth != null && request.resource.data.ownerId == request.auth.uid;
+ *       allow update: if request.auth != null && resource.data.ownerId == request.auth.uid
+ *                     && request.resource.data.ownerId == request.auth.uid;
+ *       allow delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
+ *     }
+ *   }
+ * }
+ */
+const FIREBASE_CONFIG = {
+  apiKey: 'YOUR_FIREBASE_API_KEY',
+  authDomain: 'YOUR_PROJECT.firebaseapp.com',
+  projectId: 'YOUR_PROJECT_ID',
+  appId: 'YOUR_FIREBASE_APP_ID',
+};
+const state = { links: Storage.load(), category: '전체', query: '', uploadTarget: 'general' };
+const STANDARD_CATEGORIES = Object.keys(CONFIG.categories).filter((category) => category !== '사각지대');
+
+/* ---------- 5. UTILS ---------- */
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const hostOf = (url) => { try { return new URL(url).hostname; } catch { return ''; } };
+const colorOf = (cat) => CONFIG.categories[cat] || '#8A8F99';
+
+function firebaseConfigured() {
+  return FIREBASE_CONFIG.apiKey !== 'YOUR_FIREBASE_API_KEY' &&
+    FIREBASE_CONFIG.projectId !== 'YOUR_PROJECT_ID' &&
+    FIREBASE_CONFIG.appId !== 'YOUR_FIREBASE_APP_ID';
+}
+
+function syncOwnedLinks(links) {
+  if (!firestore || !firebaseAuth?.currentUser) return;
+  const seedIds = new Set(SEED_LINKS.map((link) => link.id));
+  links.filter((link) => !seedIds.has(link.id) && link.ownerId === firebaseAuth.currentUser.uid)
+    .forEach((link) => firestore.collection('sharedLinks').doc(String(link.id)).set(link).catch((error) => {
+      console.error('Firestore 링크 저장 실패:', error);
+      alert('공유 저장에 실패했습니다. Firebase 설정과 Firestore 규칙을 확인해 주세요.');
+    }));
+}
+
+function deleteSharedLink(link) {
+  if (!firestore || !firebaseAuth?.currentUser || link.ownerId !== firebaseAuth.currentUser.uid) return;
+  firestore.collection('sharedLinks').doc(String(link.id)).delete().catch((error) => {
+    console.error('Firestore 링크 삭제 실패:', error);
+    alert('공유 링크를 삭제하지 못했습니다. Firebase 보안 규칙을 확인해 주세요.');
+  });
+}
+
+async function initializeFirebaseSharing() {
+  if (!firebaseConfigured() || !window.firebase) return;
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    firebaseAuth = firebase.auth();
+    firestore = firebase.firestore();
+    const previousOwnerId = OWNER_ID;
+    const credential = await firebaseAuth.signInAnonymously();
+    OWNER_ID = credential.user.uid;
+    state.links = state.links.map((link) => link.ownerId === previousOwnerId ? { ...link, ownerId: OWNER_ID } : link);
+    Storage.saveLocal(state.links);
+
+    const seedIds = new Set(SEED_LINKS.map((link) => link.id));
+    const legacyOwned = state.links.filter((link) => !seedIds.has(link.id) && link.ownerId === OWNER_ID);
+    await Promise.all(legacyOwned.map((link) => firestore.collection('sharedLinks').doc(String(link.id)).set(link, { merge: true })));
+
+    sharedLinksUnsubscribe = firestore.collection('sharedLinks').onSnapshot((snapshot) => {
+      const shared = snapshot.docs.map((doc) => doc.data());
+      const sharedIds = new Set(shared.map((link) => String(link.id)));
+      const unsyncedLocal = state.links.filter((link) => !seedIds.has(link.id) && link.ownerId === OWNER_ID && !sharedIds.has(String(link.id)));
+      state.links = [...SEED_LINKS, ...shared, ...unsyncedLocal];
+      Storage.saveLocal(state.links);
+      renderAll();
+    }, (error) => {
+      console.error('Firestore 실시간 동기화 실패:', error);
+      alert('공유 링크를 불러오지 못했습니다. Firestore 보안 규칙을 확인해 주세요.');
+    });
+    renderAll();
+  } catch (error) {
+    console.error('Firebase 연결 실패:', error);
+    alert('Firebase 연결에 실패했습니다. 웹 앱 설정과 익명 로그인을 확인해 주세요.');
+  }
+}
+
+function filteredLinks() {
+  const q = state.query.trim().toLowerCase();
+  return state.links.filter((l) =>
+    (state.category === '전체' ? l.category !== '사각지대' : l.category === state.category) &&
+    (!q || [l.name, l.desc, l.url, ...(l.tags || [])].join(' ').toLowerCase().includes(q))
+  );
+}
+
+/* ---------- 6. RENDER ---------- */
+
+/** 광고 슬롯. 실제 광고 코드는 아래 AD_SNIPPETS 에 넣으세요. */
+const AD_SNIPPETS = {
+  // 예) top: '<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-XXXX" data-ad-slot="XXXX" data-ad-format="auto"></ins>',
+  top: '', side: '', feed: '',
+};
+function renderAd(slot, sizeClass) {
+  // 광고 코드가 있으면 그대로 삽입, 없으면 자리표시자 표시
+  const inner = AD_SNIPPETS[slot] || `<span class="text-xs">광고 영역 (${slot})</span>`;
+  return `<div class="ad-slot rounded-lg grid place-items-center ${sizeClass}" data-ad="${slot}">${inner}</div>`;
+}
+
+function renderChips() {
+  const cats = ['전체', ...STANDARD_CATEGORIES];
+  $('#chips').innerHTML = cats.map((c) => {
+    const on = c === state.category;
+    const n = c === '전체' ? state.links.filter((l) => l.category !== '사각지대').length : state.links.filter((l) => l.category === c).length;
+    return `<button data-cat="${esc(c)}" class="shrink-0 h-9 px-4 rounded-md text-sm font-medium transition ${on ? 'accent-bg text-white' : 'surface muted'}">${esc(c)} <span class="opacity-70">${n}</span></button>`;
+  }).join('');
+  const insideShadow = state.category === '사각지대';
+  $('#shadowEntry').textContent = insideShadow ? '링크숲 홈' : '사각지대';
+  $('#shadowEntry').classList.toggle('shadow-entry', !insideShadow);
+  $('#shadowEntry').classList.toggle('surface', insideShadow);
+  $('#uploadShadowLinks').classList.toggle('hidden', !insideShadow);
+  $('#openModal').classList.toggle('hidden', insideShadow);
+}
+
+function renderIcon(l) {
+  const host = hostOf(l.url);
+  const initial = esc((l.name || '?').trim().charAt(0).toUpperCase());
+  const fav = CONFIG.useFavicon && host
+    ? `<img src="https://www.google.com/s2/favicons?sz=64&domain=${esc(host)}" data-fallback="https://icons.duckduckgo.com/ip3/${esc(host)}.ico" alt="${esc(l.name)} 로고" class="w-7 h-7 rounded bg-white object-contain p-0.5" onerror="if(this.dataset.fallback){this.src=this.dataset.fallback;this.dataset.fallback='';}else{this.remove();this.nextElementSibling.classList.remove('hidden')}" />` : '';
+  return `<span class="w-11 h-11 rounded-md grid place-items-center shrink-0 text-white font-bold overflow-hidden" style="background:${colorOf(l.category)}">${fav}<span class="${fav ? 'hidden' : ''}">${initial}</span></span>`;
+}
+
+function renderCard(l) {
+  const tags = (l.tags || []).map((t) => `<span class="text-xs muted">#${esc(t)}</span>`).join(' ');
+  return `
+  <article class="surface rounded-lg p-4 flex gap-3" style="border-left:4px solid ${colorOf(l.category)}">
+    ${renderIcon(l)}
+    <div class="min-w-0 flex-1">
+      <h3 class="font-bold truncate">${esc(l.name)}</h3>
+      <p class="text-sm muted mt-0.5 line-clamp-2">${esc(l.desc || '')}</p>
+      <div class="flex flex-wrap gap-x-2 mt-2">${tags}</div>
+      <div class="flex items-center justify-between gap-2 mt-3">
+        <span class="text-xs muted truncate">${esc(hostOf(l.url))}</span>
+        <div class="flex items-center gap-2 shrink-0">
+          ${l.ownerId === OWNER_ID ? `<button type="button" class="delete-link surface text-xs px-2.5 py-1.5 rounded-md" data-id="${l.id}" aria-label="${esc(l.name)} 삭제">삭제</button>` : ''}
+          <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer sponsored" data-id="${l.id}"
+             class="go card text-sm font-medium px-3 py-1.5 rounded-lg accent-bg text-white">바로가기</a>
+        </div>
+      </div>
+    </div>
+  </article>`;
+}
+
+function renderGrid() {
+  const list = filteredLinks();
+  $('#count').textContent = `${list.length}개의 링크`;
+  if (!list.length) {
+    $('#grid').innerHTML = `<div class="surface rounded-lg p-8 text-center sm:col-span-2">
+      <p class="font-medium">검색 결과가 없습니다</p>
+      <p class="muted text-sm mt-1">다른 키워드를 입력하거나 새 링크를 추가해 보세요.</p></div>`;
+    return;
+  }
+  const n = CONFIG.adEveryN;
+  $('#grid').innerHTML = list.map((l, i) =>
+    renderCard(l) + (n && (i + 1) % n === 0 && i + 1 < list.length
+      ? `<div class="sm:col-span-2">${renderAd('feed', 'h-24')}</div>` : '')
+  ).join('');
+}
+
+function renderPopular() {
+  const visibleLinks = state.category === '사각지대'
+    ? state.links.filter((l) => l.category === '사각지대')
+    : state.links.filter((l) => l.category !== '사각지대');
+  const top = [...visibleLinks].sort((a, b) => (b.clicks || 0) - (a.clicks || 0)).slice(0, 5);
+  $('#popular').innerHTML = top.map((l) =>
+    `<li class="flex justify-between gap-2"><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" class="truncate hover:underline">${esc(l.name)}</a><span class="muted">${l.clicks || 0}</span></li>`
+  ).join('');
+}
+
+function renderAll() { renderChips(); renderGrid(); renderPopular(); }
+
+/* ---------- 7. EVENTS ---------- */
+function setTheme(mode) {
+  document.documentElement.classList.toggle('dark', mode === 'dark');
+  try { localStorage.setItem(CONFIG.themeKey, mode); } catch {}
+}
+
+function openModal() { $('#modal').classList.replace('hidden', 'flex'); $('#addForm [name=name]').focus(); }
+function closeModal() { $('#modal').classList.replace('flex', 'hidden'); $('#addForm').reset(); $('#formError').classList.add('hidden'); }
+
+function parseCsv(text) {
+  const rows = []; let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"' && quoted && text[i + 1] === '"') { cell += '"'; i++; }
+    else if (ch === '"') quoted = !quoted;
+    else if (ch === ',' && !quoted) { row.push(cell); cell = ''; }
+    else if ((ch === '\n' || ch === '\r') && !quoted) {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); if (row.some((v) => v.trim())) rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  row.push(cell); if (row.some((v) => v.trim())) rows.push(row);
+  if (rows.length < 2) return [];
+  const headers = rows.shift().map((h) => h.trim().toLowerCase());
+  return rows.map((values) => Object.fromEntries(headers.map((h, i) => [h, (values[i] || '').trim()])));
+}
+
+function importLinks(text, filename) {
+  let records;
+  if (filename.toLowerCase().endsWith('.json')) {
+    const parsed = JSON.parse(text);
+    records = Array.isArray(parsed) ? parsed : parsed.links;
+  } else records = parseCsv(text);
+  if (!Array.isArray(records)) throw new Error('JSON은 링크 객체 배열 또는 {"links": [...]} 형식이어야 합니다.');
+  const imported = records.map((item) => {
+    const name = String(item.name || item.title || '').trim();
+    let url = String(item.url || item.href || '').trim();
+    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    if (!name || !hostOf(url)) return null;
+    const category = '사각지대';
+    const rawTags = Array.isArray(item.tags) ? item.tags : String(item.tags || '').split(/[;；]/);
+    return { id: Date.now() + Math.random(), name, url, desc: String(item.desc || item.description || '').trim(), category,
+      tags: rawTags.map((tag) => String(tag).trim()).filter(Boolean), clicks: 0, ownerId: item.ownerId || OWNER_ID };
+  }).filter(Boolean);
+  if (!imported.length) throw new Error('가져올 수 있는 링크가 없습니다. name과 올바른 url을 확인해 주세요.');
+  state.links.unshift(...imported);
+  Storage.save(state.links);
+  state.category = state.uploadTarget === 'shadow' ? '사각지대' : '전체';
+  state.uploadTarget = 'general'; state.query = ''; $('#search').value = '';
+  renderAll();
+  alert(`${imported.length}개 링크를 추가했습니다.`);
+}
+
+function bindEvents() {
+  $('#search').addEventListener('input', (e) => { state.query = e.target.value; renderGrid(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); $('#search').focus(); }
+    if (e.key === 'Escape') closeModal();
+  });
+
+  $('#chips').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-cat]'); if (!b) return;
+    state.category = b.dataset.cat; renderAll();
+  });
+  $('#shadowEntry').addEventListener('click', () => {
+    if (state.category === '사각지대') {
+      state.category = '전체'; renderAll(); return;
+    }
+    $('#ageGate').classList.replace('hidden', 'flex');
+  });
+  $('#ageYes').addEventListener('click', () => {
+    $('#ageGate').classList.replace('flex', 'hidden');
+    state.category = '사각지대'; renderAll();
+  });
+  $('#ageNo').addEventListener('click', () => {
+    $('#ageGate').classList.replace('flex', 'hidden');
+    state.category = '전체'; renderAll();
+  });
+
+  // 바로가기 클릭 수 집계 (나중에 서버 API 호출로 교체)
+  $('#grid').addEventListener('click', (e) => {
+    const removeButton = e.target.closest('.delete-link');
+    if (removeButton) {
+      const id = Number(removeButton.dataset.id);
+      const link = state.links.find((item) => item.id === id);
+      if (!link || link.ownerId !== OWNER_ID) return;
+      if (!confirm(`“${link.name}” 링크를 삭제할까요?`)) return;
+      deleteSharedLink(link);
+      state.links = state.links.filter((item) => item.id !== id);
+      Storage.save(state.links); renderAll(); return;
+    }
+    const a = e.target.closest('.go'); if (!a) return;
+    const link = state.links.find((l) => l.id === Number(a.dataset.id));
+    if (link) { link.clicks = (link.clicks || 0) + 1; Storage.save(state.links); renderPopular(); }
+  });
+
+  $('#uploadShadowLinks').addEventListener('click', () => {
+    if (state.category !== '사각지대') return;
+    state.uploadTarget = 'shadow'; $('#linkFile').click();
+  });
+  $('#linkFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try { importLinks(await file.text(), file.name); }
+    catch (error) { alert(`파일을 읽지 못했습니다: ${error.message}`); }
+    finally { e.target.value = ''; }
+  });
+
+  $('#themeBtn').addEventListener('click', () => setTheme(document.documentElement.classList.contains('dark') ? 'light' : 'dark'));
+  $('#openModal').addEventListener('click', openModal);
+  $('#closeModal').addEventListener('click', closeModal);
+  $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+
+  // 링크 추가 폼 (현재는 브라우저 저장소에만 반영 = 시뮬레이션)
+  $('#addForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const name = f.get('name').trim();
+    let url = f.get('url').trim();
+    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    if (!name || !hostOf(url)) {
+      $('#formError').textContent = '사이트 이름과 올바른 주소(https://...)를 입력해 주세요.';
+      $('#formError').classList.remove('hidden'); return;
+    }
+    state.links.unshift({
+      id: Date.now() + Math.random(), name, url, desc: f.get('desc').trim(), category: f.get('category'),
+      tags: f.get('tags').split(',').map((t) => t.trim()).filter(Boolean), clicks: 0, ownerId: OWNER_ID,
+    });
+    Storage.save(state.links);
+    state.category = '전체'; state.query = ''; $('#search').value = '';
+    closeModal(); renderAll();
+  });
+}
+
+/* ---------- 8. INIT ---------- */
+function init() {
+  const saved = (() => { try { return localStorage.getItem(CONFIG.themeKey); } catch { return null; } })();
+  setTheme(saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  $('#adTop').innerHTML = renderAd('top', 'h-20 sm:h-[90px]');
+  $('#adSide').innerHTML = renderAd('side', 'h-[250px]');
+  $('#addForm [name=category]').innerHTML = STANDARD_CATEGORIES.map((c) => `<option>${esc(c)}</option>`).join('');
+  bindEvents(); renderAll();
+  initializeFirebaseSharing();
+}
+init();
+</script>
+</body>
+</html>
